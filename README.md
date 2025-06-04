@@ -3,7 +3,7 @@ This program is designed for Windows users to execute a cron job without requiri
 
 # Config
 
-The config files locate at `$HOME.config\cron` folder.
+The config files locate at `$HOME\.config\cron` folder.
 - crontab.txt
 - at.txt
 - cron.properties
