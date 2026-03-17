@@ -51,6 +51,7 @@ public class Streams {
             if (!Files.isDirectory(parent)) {
                 Files.createDirectories(parent);
             }
+            Files.createFile(AT_PATH);
         }
         List<String> atLines = Files.readAllLines(AT_PATH);
         return atLines;

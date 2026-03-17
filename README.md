@@ -11,17 +11,22 @@ The config files locate at `$HOME\.config\cron` folder.
 The content e.g.
 
 crontab.txt
-> 0 * * * * ? cmd /c echo hello  >> hello.txt
-> 0 0/5 * * * ? cmd /c echo world  >> hello.txt
-
+```
+0 * * * * ? cmd /c echo hello  >> hello.txt
+0 0/5 * * * ? cmd /c echo world  >> hello.txt
+```
 
 at.txt
-> 2025-06-04T22:00 cmd /c echo hello world >> hello
-> 2025-06-05T22:00 cmd /c echo hello world >> hello
+```
+2025-06-04T22:00 cmd /c echo hello world >> hello
+2025-06-05T22:00 cmd /c echo hello world >> hello
+```
 
 cron.properties
-> editor=C:\\green\\Notepad4\\notepad4.exe
-> port=8080
+```
+editor=C:\\green\\Notepad4\\notepad4.exe
+port=8080
+```
 
 # Usage
 - asu-jobs.exe help
@@ -59,9 +64,23 @@ cron.properties
 
 - asu-jobs.exe at xxx "CMD"
   - at HH:mm on MM-dd CMD
+  - at HH:mm MM-dd CMD
   - at HH:mm on MMM dd CMD
+  - at HH:mm MMM dd CMD
+  - at HH:mm on YYYY-MM-DD CMD
+  - at HH:mm YYYY-MM-DD CMD
+  - at HH:mm on MM/DD/YYYY CMD
+  - at HH:mm MM/DD/YYYY CMD
+  - at 10am CMD
+  - at 10:30pm CMD
   - at HH:mm on CMD
   - at HH:mm CMD
+  - at teatime CMD
+  - at noon CMD
+  - at midnight CMD
+  - at now + N minutes|hours|days|weeks CMD
+  - asu-jobs.exe at 14:30
+    then input the command from standard input and finish with Ctrl+Z + Enter on Windows
 
 - asu-jobs.exe edit
 `Use the text editor to modify the file named crontab.txt. The default editor is notepad.exe.`

@@ -1,0 +1,11 @@
+.idea
+.settings
+*.iml
+target
+*.log
+*.class
+*.jar
+.classpath
+.factorypath
+.project
+.m2

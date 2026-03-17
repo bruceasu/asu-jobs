@@ -1,12 +1,17 @@
 package me.asu.jobs;
 
-import me.asu.http.Application;
-import me.asu.httpclient.SimpleHttpClient;
-import me.asu.httpclient.SimpleHttpResponse;
-
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.io.Reader;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -22,8 +27,9 @@ public class Crontab {
     // 2. $home/.config/crontab
     // 3. $home/.config/at
     // 4. $home/.config/cron.properties
-    static final String start_cmd = "http://localhost:%d/reload";
-    static final String start_stop = "http://localhost:%d/stop";
+    static final String CMD_RELOAD = "reload";
+    static final String CMD_STOP = "stop";
+    static final String RESPONSE_OK = "OK";
     static final Map<String, String> WEEK_MAP = new HashMap<>();
     static final Map<String, String> WEEK_FULL = new HashMap<>();
     static final Set<String> WEEKEND = new HashSet<>(Arrays.asList("1", "7"));
@@ -91,27 +97,7 @@ public class Crontab {
         }
 
         int port = getWebServerPort();
-        Application server = new Application(port);
-        server.addRoute("/reload", (req, rsp) -> {
-            try {
-                QuartzManager.reload();
-                rsp.send(200, "OK");
-            } catch (Exception e) {
-                rsp.send(500, "FAIL!\n" + e.getMessage());
-            }
-            return 0;
-        }, "POST");
-        server.addRoute("/stop", (req, rsp) -> {
-            try {
-                System.out.println("Stopping server...");
-                rsp.send(200, "OK");
-                rsp.getBody().flush();
-            } finally {
-                System.exit(0);
-            }
-            return 0;
-        }, "POST");
-        server.run();
+        runControlServer(port);
     }
 
     private static void edit() {
@@ -126,10 +112,8 @@ public class Crontab {
 
     private static void reload() {
         int port = getWebServerPort();
-        final SimpleHttpClient simpleHttpClient = SimpleHttpClient.create(String.format(start_cmd, port));
         try {
-            SimpleHttpResponse resp = simpleHttpClient.post().send();
-            info("<<< ", resp.getContent());
+            info("<<< ", sendControlCommand(port, CMD_RELOAD));
         } catch (Exception e) {
             error("<<< ", e.getMessage());
         }
@@ -140,10 +124,8 @@ public class Crontab {
 
     private static void stop() {
         int port = getWebServerPort();
-        final SimpleHttpClient simpleHttpClient = SimpleHttpClient.create(String.format(start_stop, port));
         try {
-            SimpleHttpResponse resp = simpleHttpClient.post().send();
-            info("<<< ", resp.getContent());
+            info("<<< ", sendControlCommand(port, CMD_STOP));
         } catch (Exception e) {
             error("<<< ", e.getMessage());
         }
@@ -217,6 +199,7 @@ public class Crontab {
             }
             String cron = parseCron(sb.toString());
             appendToCron(cron + "\n");
+            reload();
         } catch (Exception e) {
             error(e.getMessage());
         }
@@ -224,12 +207,10 @@ public class Crontab {
 
     static void parseAtCommand(List<String> input)  {
         try {
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < input.size(); i++) {
-                sb.append(input.get(i)).append(' ');
-            }
-            String at = parseAt(sb.toString());
+            String at = buildAtEntry(input, new InputStreamReader(System.in, StandardCharsets.UTF_8),
+                    LocalDateTime.now());
             appendToAt(at + "\n");
+            reload();
         } catch (Exception e) {
           error(e.getMessage());
         }
@@ -305,6 +286,8 @@ public class Crontab {
             case "apr":
             case "april":
                 return 4;
+            case "may":
+                return 5;
             case "jun":
             case "june":
                 return 6;
@@ -355,7 +338,292 @@ public class Crontab {
      *  </tbody>
      * </table>
      */
+    static class AtParseResult {
+        final LocalDateTime dateTime;
+        final String command;
+
+        AtParseResult(LocalDateTime dateTime, String command) {
+            this.dateTime = dateTime;
+            this.command = command;
+        }
+    }
+
+    static String buildAtEntry(List<String> input, Reader stdin, LocalDateTime now) throws IOException {
+        if (input == null || input.size() < 2) {
+            throw new IllegalArgumentException("at TIME [DATE] [CMD]");
+        }
+        List<String> args = input.subList(1, input.size());
+        AtParseResult result = parseAtArgs(args, now);
+        String cmd = result.command;
+        if (cmd == null || cmd.trim().isEmpty()) {
+            if (System.console() != null) {
+                System.out.println("请输入任务命令，按 Ctrl+Z 后回车结束：");
+            }
+            cmd = readAtCommand(stdin);
+        }
+        if (cmd == null || cmd.trim().isEmpty()) {
+            throw new IllegalArgumentException("at 命令不能为空");
+        }
+        return formatAtEntry(result.dateTime, cmd);
+    }
+
+    static String formatAtEntry(LocalDateTime dateTime, String command) {
+        return dateTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + " " + command.trim();
+    }
+
+    static String readAtCommand(Reader stdin) throws IOException {
+        if (stdin == null) {
+            return "";
+        }
+        String raw = Streams.readAll(stdin);
+        return raw == null ? "" : raw.replace("\r\n", " ").replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    static AtParseResult parseAtArgs(List<String> args, LocalDateTime now) {
+        if (args == null || args.isEmpty()) {
+            throw new IllegalArgumentException("at TIME [DATE] [CMD]");
+        }
+
+        AtParseResult result = parseLinuxAtArgs(args, now);
+        if (result != null) {
+            return result;
+        }
+
+        String input = "at " + String.join(" ", args).trim();
+        result = parseLegacyAtArgs(input, now);
+        if (result != null) {
+            return result;
+        }
+
+        throw new IllegalArgumentException("Unsupported command: " + input);
+    }
+
+    static AtParseResult parseLinuxAtArgs(List<String> args, LocalDateTime now) {
+        if (args.isEmpty()) {
+            return null;
+        }
+        String first = args.get(0);
+        if ("now".equalsIgnoreCase(first)) {
+            if (args.size() < 4 || !"+".equals(args.get(1))) {
+                throw new IllegalArgumentException("at now + N minutes|hours|days|weeks [CMD]");
+            }
+            int amount = Integer.parseInt(args.get(2));
+            LocalDateTime target = addRelativeTime(now, amount, args.get(3));
+            return new AtParseResult(target, joinTail(args, 4));
+        }
+
+        LocalTime namedTime = parseNamedTime(first);
+        if (namedTime != null) {
+            int dateIndex = resolveAtDateIndex(args);
+            if (dateIndex > 0 && isDateToken(args.get(dateIndex))) {
+                LocalDate date = parseDateToken(args.get(dateIndex), now, namedTime);
+                return new AtParseResult(date.atTime(namedTime), joinTail(args, dateIndex + 1));
+            }
+            return new AtParseResult(resolveNextDateTime(namedTime, now), joinTail(args, 1));
+        }
+
+        LocalTime time = parseClockTime(first);
+        if (time == null) {
+            return null;
+        }
+        int dateIndex = resolveAtDateIndex(args);
+        if (dateIndex > 0 && isDateToken(args.get(dateIndex))) {
+            LocalDate date = parseDateToken(args.get(dateIndex), now, time);
+            return new AtParseResult(date.atTime(time), joinTail(args, dateIndex + 1));
+        }
+        return new AtParseResult(resolveNextDateTime(time, now), joinTail(args, 1));
+    }
+
+    static AtParseResult parseLegacyAtArgs(String input, LocalDateTime now) {
+        Matcher matcher = Pattern.compile("^at\\s+(\\d{1,2}):(\\d{2})\\s+on\\s+(\\d{1,2})[-/.](\\d{1,2})(?:\\s+(.+))?$",
+                Pattern.CASE_INSENSITIVE).matcher(input);
+        if (matcher.matches()) {
+            LocalTime time = validateTime(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)));
+            int mm = Integer.parseInt(matcher.group(3));
+            int dd = Integer.parseInt(matcher.group(4));
+            LocalDateTime target = resolveMonthDay(mm, dd, now.toLocalDate(), time, now);
+            return new AtParseResult(target, matcher.group(5));
+        }
+
+        matcher = Pattern.compile("^at\\s+(\\d{1,2}):(\\d{2})\\s+on\\s+([a-zA-Z]{3,9})\\s+(\\d{1,2})(?:\\s+(.+))?$",
+                Pattern.CASE_INSENSITIVE).matcher(input);
+        if (matcher.matches()) {
+            LocalTime time = validateTime(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)));
+            int mm = parseMonthStr(matcher.group(3));
+            int dd = Integer.parseInt(matcher.group(4));
+            LocalDateTime target = resolveMonthDay(mm, dd, now.toLocalDate(), time, now);
+            return new AtParseResult(target, matcher.group(5));
+        }
+
+        matcher = Pattern.compile("^at\\s+(\\d{1,2}):(\\d{2})\\s+on\\s+([a-zA-Z,\\-]+)(?:\\s+(.+))?$",
+                Pattern.CASE_INSENSITIVE).matcher(input);
+        if (matcher.matches()) {
+            LocalTime time = validateTime(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)));
+            List<Integer> target = parseDayExprToDayList(matcher.group(3));
+            LocalDateTime next = null;
+            for (int i = 0; i < 7; i++) {
+                LocalDateTime candidate = now.toLocalDate().plusDays(i).atTime(time);
+                int day = candidate.getDayOfWeek().getValue() % 7 + 1;
+                if (candidate.isAfter(now) && target.contains(day)) {
+                    next = candidate;
+                    break;
+                }
+            }
+            if (next == null) {
+                throw new IllegalArgumentException("鎵句笉鍒版湭鏉ヤ竴鍛ㄧ殑鐩爣鏃ユ湡");
+            }
+            return new AtParseResult(next, matcher.group(4));
+        }
+        return null;
+    }
+
+    static LocalDateTime addRelativeTime(LocalDateTime now, int amount, String unit) {
+        String normalized = unit.trim().toLowerCase(Locale.ROOT);
+        if (amount < 0) {
+            throw new IllegalArgumentException("时间偏移必须大于等于 0");
+        }
+        if ("minute".equals(normalized) || "minutes".equals(normalized)) {
+            return now.plusMinutes(amount);
+        }
+        if ("hour".equals(normalized) || "hours".equals(normalized)) {
+            return now.plusHours(amount);
+        }
+        if ("day".equals(normalized) || "days".equals(normalized)) {
+            return now.plusDays(amount);
+        }
+        if ("week".equals(normalized) || "weeks".equals(normalized)) {
+            return now.plusWeeks(amount);
+        }
+        throw new IllegalArgumentException("Unsupported at unit: " + unit);
+    }
+
+    static LocalTime parseNamedTime(String token) {
+        if (token == null) {
+            return null;
+        }
+        String normalized = token.trim().toLowerCase(Locale.ROOT);
+        if ("teatime".equals(normalized)) {
+            return LocalTime.of(16, 0);
+        }
+        if ("noon".equals(normalized)) {
+            return LocalTime.NOON;
+        }
+        if ("midnight".equals(normalized)) {
+            return LocalTime.MIDNIGHT;
+        }
+        return null;
+    }
+
+    static LocalTime parseClockTime(String token) {
+        if (token == null) {
+            return null;
+        }
+        String normalized = token.trim().toLowerCase(Locale.ROOT);
+        Matcher matcher = Pattern.compile("^(\\d{1,2})(?::(\\d{2}))?([ap]m)?$").matcher(normalized);
+        if (!matcher.matches()) {
+            return null;
+        }
+        int hour = Integer.parseInt(matcher.group(1));
+        int minute = matcher.group(2) == null ? 0 : Integer.parseInt(matcher.group(2));
+        String meridiem = matcher.group(3);
+        if (meridiem == null && matcher.group(2) == null) {
+            return null;
+        }
+        if (meridiem == null) {
+            return validateTime(hour, minute);
+        }
+        if (hour < 1 || hour > 12 || minute < 0 || minute > 59) {
+            throw new IllegalArgumentException("闈炴硶鏃堕棿: " + token);
+        }
+        if ("am".equals(meridiem)) {
+            hour = hour % 12;
+        } else {
+            hour = hour % 12 + 12;
+        }
+        return LocalTime.of(hour, minute);
+    }
+
+    static int resolveAtDateIndex(List<String> args) {
+        if (args.size() > 2 && "on".equalsIgnoreCase(args.get(1))) {
+            return 2;
+        }
+        if (args.size() > 1) {
+            return 1;
+        }
+        return -1;
+    }
+
+    static LocalTime validateTime(int hour, int minute) {
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+            throw new IllegalArgumentException("非法时间: " + hour + ":" + minute);
+        }
+        return LocalTime.of(hour, minute);
+    }
+
+    static boolean isDateToken(String token) {
+        if (token == null) {
+            return false;
+        }
+        return token.matches("\\d{4}-\\d{1,2}-\\d{1,2}")
+                || token.matches("\\d{1,2}/\\d{1,2}/\\d{4}")
+                || token.matches("\\d{1,2}[-/.]\\d{1,2}");
+    }
+
+    static LocalDate parseDateToken(String token, LocalDateTime now, LocalTime time) {
+        if (token.matches("\\d{4}-\\d{1,2}-\\d{1,2}")) {
+            String[] parts = token.split("-");
+            return LocalDate.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
+        }
+        if (token.matches("\\d{1,2}/\\d{1,2}/\\d{4}")) {
+            String[] parts = token.split("/");
+            return LocalDate.of(Integer.parseInt(parts[2]), Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
+        }
+        if (token.matches("\\d{1,2}[-/.]\\d{1,2}")) {
+            String[] parts = token.split("[-/.]");
+            return resolveMonthDay(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), now.toLocalDate(),
+                    time, now).toLocalDate();
+        }
+        throw new IllegalArgumentException("Unsupported date: " + token);
+    }
+
+    static LocalDateTime resolveMonthDay(int month, int day, LocalDate baseDate, LocalTime time, LocalDateTime now) {
+        LocalTime actualTime = time == null ? LocalTime.MIDNIGHT : time;
+        int year = baseDate.getYear();
+        LocalDateTime target = LocalDate.of(year, month, day).atTime(actualTime);
+        if (!target.isAfter(now)) {
+            target = LocalDate.of(year + 1, month, day).atTime(actualTime);
+        }
+        return target;
+    }
+
+    static LocalDateTime resolveNextDateTime(LocalTime time, LocalDateTime now) {
+        LocalDateTime candidate = now.toLocalDate().atTime(time);
+        if (!candidate.isAfter(now)) {
+            candidate = candidate.plusDays(1);
+        }
+        return candidate;
+    }
+
+    static String joinTail(List<String> args, int fromIndex) {
+        if (fromIndex >= args.size()) {
+            return "";
+        }
+        return String.join(" ", args.subList(fromIndex, args.size())).trim();
+    }
+
     public static String parseAt(String input) {
+        input = input.trim();
+        if (!input.toLowerCase(Locale.ROOT).startsWith("at ")) {
+            throw new IllegalArgumentException("Unsupported command: " + input);
+        }
+        AtParseResult result = parseAtArgs(Arrays.asList(input.substring(3).trim().split("\\s+")), LocalDateTime.now());
+        if (result.command == null || result.command.trim().isEmpty()) {
+            return parseAtLegacyInline(input);
+        }
+        return formatAtEntry(result.dateTime, result.command);
+    }
+
+    static String parseAtLegacyInline(String input) {
         input = input.trim();
         // -------- 1)  at HH:mm on MM-dd CMD (顺延到明年) --------
         {
@@ -638,6 +906,66 @@ public class Crontab {
         }
 
         throw new IllegalArgumentException("Unsupported command: " + input);
+    }
+
+    static void runControlServer(int port) throws IOException {
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            info("Control socket listening on port ", String.valueOf(port));
+            while (true) {
+                try (Socket socket = serverSocket.accept()) {
+                    if (handleControlCommand(socket)) {
+                        return;
+                    }
+                } catch (Exception e) {
+                    error("Control socket error: ", e.getMessage());
+                }
+            }
+        }
+    }
+
+    static boolean handleControlCommand(Socket socket) throws IOException {
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+        PrintWriter writer = new PrintWriter(
+                new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
+        String command = reader.readLine();
+        if (command == null) {
+            writer.println("FAIL: empty command");
+            return false;
+        }
+        switch (command.trim().toLowerCase(Locale.ROOT)) {
+            case CMD_RELOAD:
+                try {
+                    QuartzManager.reload();
+                    writer.println(RESPONSE_OK);
+                } catch (Exception e) {
+                    writer.println("FAIL: " + e.getMessage());
+                }
+                return false;
+            case CMD_STOP:
+                System.out.println("Stopping server...");
+                writer.println(RESPONSE_OK);
+                writer.flush();
+                return true;
+            default:
+                writer.println("FAIL: unsupported command");
+                return false;
+        }
+    }
+
+    static String sendControlCommand(int port, String command) throws IOException {
+        try (Socket socket = new Socket("127.0.0.1", port);
+             PrintWriter writer = new PrintWriter(
+                     new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
+            writer.println(command);
+            String response = reader.readLine();
+            if (response == null || response.isEmpty()) {
+                throw new IOException("empty response");
+            }
+            return response;
+        }
     }
 
 }

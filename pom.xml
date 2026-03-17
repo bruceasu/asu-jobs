@@ -17,52 +17,20 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>me.asu</groupId>
-                <artifactId>asu-httpclient</artifactId>
-                <version>1.0-SNAPSHOT</version>
-            </dependency>
-
-            <dependency>
-                <groupId>me.asu</groupId>
-                <artifactId>asu-http</artifactId>
-                <version>2.0-SNAPSHOT</version>
-            </dependency>
-            <dependency>
                 <groupId>org.quartz-scheduler</groupId>
                 <artifactId>quartz</artifactId>
                 <version>2.3.2</version>
-            </dependency>
-            <!-- okjson 用于 JSON 解析与美化 -->
-            <dependency>
-                <groupId>xyz.calvinwilliams</groupId>
-                <artifactId>okjson</artifactId>
-                <version>0.0.10.1</version>
             </dependency>
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-jdk14</artifactId>
                 <version>1.7.25</version>
             </dependency>
-            <!-- jline3 用于交互式命令输入和自动补全 -->
-            <dependency>
-                <groupId>org.jline</groupId>
-                <artifactId>jline</artifactId>
-                <version>3.21.0</version>
-            </dependency>
         </dependencies>
     </dependencyManagement>
 
 
     <dependencies>
-        <dependency>
-            <groupId>me.asu</groupId>
-            <artifactId>asu-httpclient</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>me.asu</groupId>
-            <artifactId>asu-http</artifactId>
-        </dependency>
-        <!-- quartz -->
         <dependency>
             <groupId>org.quartz-scheduler</groupId>
             <artifactId>quartz</artifactId>
@@ -80,11 +48,6 @@
                     <artifactId>c3p0</artifactId>
                 </exclusion>
             </exclusions>
-        </dependency>
-        <!-- okjson 用于 JSON 解析与美化 -->
-        <dependency>
-            <groupId>xyz.calvinwilliams</groupId>
-            <artifactId>okjson</artifactId>
         </dependency>
         <!-- use jdk logging -->
         <!-- https://mvnrepository.com/artifact/org.slf4j/slf4j-jdk14 -->
@@ -108,35 +71,8 @@
     </dependencies>
 
 
-    <!--程序构建信息-->
     <build>
         <plugins>
-            <!--            <plugin>-->
-            <!--                <groupId>org.apache.maven.plugins</groupId>-->
-            <!--                <artifactId>maven-antrun-plugin</artifactId>-->
-            <!--                <version>1.8</version>-->
-            <!--                <executions>-->
-            <!--                    <execution>-->
-            <!--                        <id>compile-forms</id>-->
-            <!--                        <phase>generate-sources</phase>-->
-            <!--                        <configuration>-->
-            <!--                            <target>-->
-            <!--                                <java jar="/path/to/intellij/idea/lib/forms-compiler.jar" fork="true">-->
-            <!--                                    &lt;!&ndash; 参数根据 IntelliJ 版本和实际情况调整 &ndash;&gt;-->
-            <!--                                    <arg value="-uiDesigner"/>-->
-            <!--                                    <arg value="src/main/java"/>-->
-            <!--                                    <arg value="target/generated-sources/forms"/>-->
-            <!--                                </java>-->
-            <!--                            </target>-->
-            <!--                        </configuration>-->
-            <!--                        <goals>-->
-            <!--                            <goal>run</goal>-->
-            <!--                        </goals>-->
-            <!--                    </execution>-->
-            <!--                </executions>-->
-            <!--            </plugin>-->
-
-            <!--编译插件-->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -147,7 +83,6 @@
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.1.0</version>
                 <configuration>
-                    <!--配置主类清单文件-->
                     <archive>
                         <manifest>
                             <addClasspath>true</addClasspath>
